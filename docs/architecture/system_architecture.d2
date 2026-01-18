@@ -1,0 +1,110 @@
+# SharkBand System Architecture
+
+# Clients Layer
+MerchantDashboard: {
+  shape: rectangle
+  label: "Merchant Dashboard\n(React + Vite)\nWeb App"
+}
+
+VendorApp: {
+  shape: rectangle
+  label: "Vendor/Staff App\n(Expo React Native)\nMobile App"
+}
+
+CustomerApp: {
+  shape: rectangle
+  label: "Customer App\n(Expo React Native)\nMobile App"
+}
+
+# API Gateway & Auth Layer
+APIGateway: {
+  shape: rectangle
+  label: "API Gateway\n/api/v1/*\nVersion Negotiation"
+}
+
+AuthMiddleware: {
+  shape: rectangle
+  label: "Auth Middleware\nJWT Validation\nScope Enforcement\nTenant Resolution"
+}
+
+# Domain Services Layer
+TransactionService: {
+  shape: rectangle
+  label: "Transaction Service\nIssue/Redeem\nValidation\nIdempotency Check"
+}
+
+LoyaltyEngine: {
+  shape: rectangle
+  label: "Loyalty Engine\nRule Evaluation\nPoints Calculation\nTier Management"
+}
+
+LedgerService: {
+  shape: cylinder
+  label: "Ledger Service\nAppend Entry\nDerive Balance\nImmutable History"
+}
+
+# Data & Events Layer
+PostgreSQL: {
+  shape: cylinder
+  label: "PostgreSQL\nSystem of Record\nLedger Entries\nOutbox Events\nRead Models"
+}
+
+OutboxDispatcher: {
+  shape: rectangle
+  label: "Outbox Dispatcher\nBackground Worker\nPolls outbox_events\nPublishes to NATS"
+}
+
+NATS: {
+  shape: cylinder
+  label: "NATS Message Broker\nEvent Streaming\nloyalty.* topics"
+}
+
+ReadModelUpdaters: {
+  shape: rectangle
+  label: "Read Model Updaters\nNATS Subscribers\nIdempotent Handlers\nUpdate Denormalized Tables"
+}
+
+# Optional Realtime
+RealtimeChannel: {
+  shape: rectangle
+  style.opacity: 0.7
+  label: "Realtime Channel\n(Optional WebSocket)\nLive Updates"
+}
+
+# Connections
+MerchantDashboard -> APIGateway: "HTTPS\nREST API"
+VendorApp -> APIGateway: "HTTPS\nREST API"
+CustomerApp -> APIGateway: "HTTPS\nREST API"
+
+APIGateway -> AuthMiddleware: "Request\nForwarding"
+
+AuthMiddleware -> TransactionService: "Authenticated\nTenant Context"
+AuthMiddleware -> LoyaltyEngine: "Authenticated\nTenant Context"
+
+TransactionService -> LedgerService: "appendEntry()\nIdempotency Key"
+TransactionService -> LoyaltyEngine: "Validate Rules\nCalculate Points"
+
+LedgerService -> PostgreSQL: "Atomic Write\nTransaction + Ledger Entry"
+
+TransactionService -> PostgreSQL: "Write Transaction\nWrite Outbox Event\nAtomic Commit"
+
+PostgreSQL -> OutboxDispatcher: "Query\nstatus=PENDING"
+
+OutboxDispatcher -> NATS: "Publish Event\nloyalty.points.issued\nloyalty.points.redeemed"
+
+NATS -> ReadModelUpdaters: "Subscribe\nEvent Consumption"
+
+ReadModelUpdaters -> PostgreSQL: "Update\ncustomer_balances\ntransaction_summaries"
+
+CustomerApp -> RealtimeChannel: "WebSocket\n(Optional)"
+RealtimeChannel -> NATS: "Subscribe\nEvent Stream"
+
+# Tenant Isolation Notes
+PostgreSQL {
+  note: "All queries filtered by tenant_id\nEnforced at:\n1. Middleware (JWT claims)\n2. Service Layer (explicit tenant_id param)\n3. Database (tenant_id in WHERE clauses)"
+}
+
+# Security Notes
+AuthMiddleware {
+  note: "JWT Claims:\n- tenant_id\n- user_id\n- scopes: merchant:*, scan:*, customer:*\n\nScope Guard enforces:\n@RequireScope('merchant:*')"
+}

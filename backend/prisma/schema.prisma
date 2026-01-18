@@ -1,0 +1,450 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(255)
+  config    Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  locations            Location[]
+  users                User[]
+  customerAccounts     CustomerMerchantAccount[]
+  transactions         Transaction[]
+  ledgerEntries        LoyaltyLedgerEntry[]
+  rewards              Reward[]
+  redemptions          Redemption[]
+  rulesets             Ruleset[]
+  devices              Device[]
+  auditLogs            AuditLog[]
+  outboxEvents         OutboxEvent[]
+  customerBalances     CustomerBalance[]
+  transactionSummaries TransactionSummary[]
+  pilotDailyMetrics    PilotDailyMetric[]
+  pilotOnboardingFunnel PilotOnboardingFunnel?
+
+  @@index([createdAt])
+  @@map("tenants")
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String   @db.VarChar(255)
+  address   String?  @db.Text
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  devices Device[]
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("locations")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  email         String   @db.VarChar(255)
+  hashedPassword String  @map("hashed_password") @db.VarChar(255)
+  roles         Json     @default("[]")
+  scopes        Json     @default("[]")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  registeredDevices Device[] @relation("DeviceRegistrar")
+  auditLogs     AuditLog[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+  @@index([isActive])
+  @@map("users")
+}
+
+model Customer {
+  id                  String   @id @default(uuid())
+  qrTokenSecret       String   @map("qr_token_secret") @db.VarChar(255)
+  rotationIntervalSec Int      @default(30) @map("rotation_interval_sec")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  accounts            CustomerMerchantAccount[]
+  transactions        Transaction[]
+  ledgerEntries       LoyaltyLedgerEntry[]
+  redemptions         Redemption[]
+  customerBalances    CustomerBalance[]
+  transactionSummaries TransactionSummary[]
+  pilotCustomerActivity PilotCustomerActivity?
+
+  @@index([createdAt])
+  @@map("customers")
+}
+
+model CustomerMerchantAccount {
+  id               String   @id @default(uuid())
+  customerId       String   @map("customer_id")
+  tenantId         String   @map("tenant_id")
+  membershipStatus String   @default("ACTIVE") @map("membership_status") @db.VarChar(50)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, tenantId])
+  @@index([customerId])
+  @@index([tenantId])
+  @@index([membershipStatus])
+  @@map("customer_merchant_accounts")
+}
+
+enum TransactionType {
+  ISSUE
+  REDEEM
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model Transaction {
+  id             String           @id @default(uuid())
+  tenantId       String           @map("tenant_id")
+  customerId     String           @map("customer_id")
+  type           TransactionType
+  amount         Decimal          @db.Decimal(15, 2)
+  status         TransactionStatus @default(PENDING)
+  idempotencyKey String           @map("idempotency_key") @db.VarChar(255)
+  deviceId       String?          @map("device_id")
+  metadata       Json             @default("{}")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ledgerEntries     LoyaltyLedgerEntry[]
+  transactionSummary TransactionSummary?
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+  @@index([idempotencyKey])
+  @@map("transactions")
+}
+
+model LoyaltyLedgerEntry {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  transactionId  String   @map("transaction_id")
+  customerId     String   @map("customer_id")
+  amount         Decimal  @db.Decimal(15, 2)
+  balanceAfter   Decimal  @map("balance_after") @db.Decimal(15, 2)
+  idempotencyKey String   @map("idempotency_key") @db.VarChar(255)
+  operationType  String   @map("operation_type") @db.VarChar(50)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  customer  Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, idempotencyKey, operationType])
+  @@index([tenantId])
+  @@index([transactionId])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([tenantId, customerId, createdAt])
+  @@map("loyalty_ledger_entries")
+}
+
+model Reward {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  name          String   @db.VarChar(255)
+  pointsRequired Decimal @map("points_required") @db.Decimal(15, 2)
+  description   String?  @db.Text
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  redemptions Redemption[]
+  pilotRewardUsage PilotRewardUsage[]
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("rewards")
+}
+
+enum RedemptionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model Redemption {
+  id             String           @id @default(uuid())
+  tenantId       String           @map("tenant_id")
+  customerId     String           @map("customer_id")
+  rewardId       String           @map("reward_id")
+  pointsDeducted Decimal          @map("points_deducted") @db.Decimal(15, 2)
+  status         RedemptionStatus @default(PENDING)
+  idempotencyKey String           @map("idempotency_key") @db.VarChar(255)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt    DateTime?        @map("completed_at") @db.Timestamptz(6)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  reward   Reward   @relation(fields: [rewardId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([rewardId])
+  @@index([status])
+  @@index([idempotencyKey])
+  @@map("redemptions")
+}
+
+model Ruleset {
+  id           String    @id @default(uuid())
+  tenantId     String    @map("tenant_id")
+  ruleType     String    @map("rule_type") @db.VarChar(100)
+  config       Json      @default("{}")
+  effectiveFrom DateTime @default(now()) @map("effective_from") @db.Timestamptz(6)
+  effectiveTo   DateTime? @map("effective_to") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([ruleType])
+  @@index([effectiveFrom, effectiveTo])
+  @@map("rulesets")
+}
+
+model Device {
+  id               String   @id @default(uuid())
+  tenantId         String   @map("tenant_id")
+  locationId       String?  @map("location_id")
+  deviceIdentifier String   @map("device_identifier") @db.VarChar(255)
+  registeredByUserId String? @map("registered_by_user_id")
+  isActive         Boolean  @default(true) @map("is_active")
+  registeredAt     DateTime @default(now()) @map("registered_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant          Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location        Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  registeredBy    User?   @relation("DeviceRegistrar", fields: [registeredByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, deviceIdentifier])
+  @@index([tenantId])
+  @@index([locationId])
+  @@index([isActive])
+  @@index([deviceIdentifier])
+  @@map("devices")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  tenantId     String?  @map("tenant_id")
+  userId       String?  @map("user_id")
+  action       String   @db.VarChar(100)
+  resourceType String   @map("resource_type") @db.VarChar(100)
+  resourceId   String?  @map("resource_id")
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+model OutboxEvent {
+  id          String            @id @default(uuid())
+  tenantId    String            @map("tenant_id")
+  eventType   String            @map("event_type") @db.VarChar(255)
+  payload     Json
+  status      OutboxEventStatus @default(PENDING)
+  publishedAt DateTime?         @map("published_at") @db.Timestamptz(6)
+  retryCount  Int               @default(0) @map("retry_count")
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+// Read Models (Denormalized)
+model CustomerBalance {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  customerId    String   @map("customer_id")
+  balance       Decimal  @default(0) @db.Decimal(15, 2)
+  lastUpdatedAt DateTime @default(now()) @map("last_updated_at") @db.Timestamptz(6)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, customerId])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([lastUpdatedAt])
+  @@map("customer_balances")
+}
+
+model TransactionSummary {
+  id              String          @id @default(uuid())
+  tenantId        String          @map("tenant_id")
+  transactionId   String          @unique @map("transaction_id")
+  customerId      String          @map("customer_id")
+  transactionDate DateTime        @map("transaction_date") @db.Date
+  amount          Decimal         @db.Decimal(15, 2)
+  type            TransactionType
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([transactionDate])
+  @@index([type])
+  @@map("transaction_summaries")
+}
+
+// Pilot Metrics (Denormalized)
+model PilotDailyMetric {
+  id                    String   @id @default(uuid())
+  tenantId              String   @map("tenant_id")
+  locationId            String?  @map("location_id")
+  metricDate            DateTime @map("metric_date") @db.Date
+  
+  activeCustomers       Int      @default(0) @map("active_customers")
+  repeatCustomers       Int      @default(0) @map("repeat_customers")
+  
+  transactionsIssue     Int      @default(0) @map("transactions_issue")
+  transactionsRedeem     Int      @default(0) @map("transactions_redeem")
+  transactionsAdjust    Int      @default(0) @map("transactions_adjust")
+  transactionsReverse   Int      @default(0) @map("transactions_reverse")
+  transactionsTotal     Int      @default(0) @map("transactions_total")
+  
+  redemptionRate       Decimal? @map("redemption_rate") @db.Decimal(5, 4)
+  avgTimeToRedeemHours Decimal? @map("avg_time_to_redeem_hours") @db.Decimal(10, 2)
+  
+  scanErrorsExpiredQr          Int @default(0) @map("scan_errors_expired_qr")
+  scanErrorsInsufficientBalance Int @default(0) @map("scan_errors_insufficient_balance")
+  scanErrorsUnauthorizedDevice  Int @default(0) @map("scan_errors_unauthorized_device")
+  scanErrorsTotal               Int @default(0) @map("scan_errors_total")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, locationId, metricDate])
+  @@index([tenantId, metricDate])
+  @@index([locationId, metricDate])
+  @@map("pilot_daily_metrics")
+}
+
+model PilotOnboardingFunnel {
+  id                        String    @id @default(uuid())
+  tenantId                  String    @unique @map("tenant_id")
+  
+  merchantSignupAt          DateTime? @map("merchant_signup_at") @db.Timestamptz(6)
+  firstLocationCreatedAt   DateTime? @map("first_location_created_at") @db.Timestamptz(6)
+  firstStaffInvitedAt       DateTime? @map("first_staff_invited_at") @db.Timestamptz(6)
+  firstDeviceRegisteredAt  DateTime? @map("first_device_registered_at") @db.Timestamptz(6)
+  firstScanAt               DateTime? @map("first_scan_at") @db.Timestamptz(6)
+  
+  timeToLocationMinutes    Int? @map("time_to_location_minutes")
+  timeToStaffMinutes       Int? @map("time_to_staff_minutes")
+  timeToDeviceMinutes      Int? @map("time_to_device_minutes")
+  timeToFirstScanMinutes   Int? @map("time_to_first_scan_minutes")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("pilot_onboarding_funnel")
+}
+
+model PilotCustomerActivity {
+  id                String   @id @default(uuid())
+  tenantId          String   @map("tenant_id")
+  customerId        String   @map("customer_id")
+  firstTransactionAt DateTime? @map("first_transaction_at") @db.Timestamptz(6)
+  lastTransactionAt  DateTime? @map("last_transaction_at") @db.Timestamptz(6)
+  transactionCount   Int      @default(0) @map("transaction_count")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, customerId])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([tenantId, lastTransactionAt])
+  @@map("pilot_customer_activity")
+}
+
+model PilotRewardUsage {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  rewardId      String   @map("reward_id")
+  metricDate    DateTime @map("metric_date") @db.Date
+  redemptionCount Int    @default(0) @map("redemption_count")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reward Reward @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, rewardId, metricDate])
+  @@index([tenantId, metricDate])
+  @@map("pilot_reward_usage")
+}

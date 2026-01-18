@@ -1,0 +1,126 @@
+# SharkBand Data Model ERD
+
+# Tenant Hierarchy
+Tenant: {
+  shape: table
+  label: "tenants\n---\nid (PK)\nname\nconfig (JSONB)\ncreated_at"
+}
+
+Location: {
+  shape: table
+  label: "locations\n---\nid (PK)\ntenant_id (FK)\nname\naddress\nis_active\ncreated_at"
+}
+
+# User & Staff Management
+User: {
+  shape: table
+  label: "users\n---\nid (PK)\ntenant_id (FK)\nemail\nhashed_password\nroles (JSONB)\nscopes (JSONB)\ncreated_at"
+}
+
+Device: {
+  shape: table
+  label: "devices\n---\nid (PK)\ntenant_id (FK)\nlocation_id (FK)\ndevice_identifier\nregistered_by_user_id (FK)\nis_active\nregistered_at"
+}
+
+# Customer & Membership
+Customer: {
+  shape: table
+  label: "customers\n---\nid (PK)\nqr_token_secret\nrotation_interval_sec\ncreated_at"
+}
+
+CustomerMerchantAccount: {
+  shape: table
+  label: "customer_merchant_accounts\n---\nid (PK)\ncustomer_id (FK)\ntenant_id (FK)\nmembership_status\ncreated_at"
+}
+
+# Transaction & Ledger (CORE)
+Transaction: {
+  shape: table
+  label: "transactions\n---\nid (PK)\ntenant_id (FK)\ncustomer_id (FK)\ntype (ISSUE|REDEEM)\namount\nstatus\nidempotency_key\ncreated_at\n\nUNIQUE(tenant_id, idempotency_key)"
+}
+
+LoyaltyLedgerEntry: {
+  shape: table
+  style.stroke: "#ff0000"
+  style.stroke-width: 3
+  label: "loyalty_ledger_entries\n---\nid (PK)\ntenant_id (FK)\ntransaction_id (FK)\ncustomer_id (FK)\namount\nbalance_after\nidempotency_key\ncreated_at\n\nAPPEND-ONLY\nNO UPDATES\nNO DELETES\n\nUNIQUE(tenant_id, idempotency_key, operation_type)"
+}
+
+# Rewards & Redemptions
+Reward: {
+  shape: table
+  label: "rewards\n---\nid (PK)\ntenant_id (FK)\nname\npoints_required\ndescription\nis_active\ncreated_at"
+}
+
+Redemption: {
+  shape: table
+  label: "redemptions\n---\nid (PK)\ntenant_id (FK)\ncustomer_id (FK)\nreward_id (FK)\npoints_deducted\nstatus (PENDING|COMPLETED|FAILED)\nidempotency_key\ncreated_at\n\nUNIQUE(tenant_id, idempotency_key)\n\nDouble-spend prevention:\n- Optimistic locking\n- SELECT FOR UPDATE"
+}
+
+# Rules & Configuration
+RuleSet: {
+  shape: table
+  label: "rulesets\n---\nid (PK)\ntenant_id (FK)\nrule_type\nconfig (JSONB)\neffective_from\neffective_to\ncreated_at"
+}
+
+# Event & Audit
+OutboxEvent: {
+  shape: table
+  style.stroke: "#0000ff"
+  style.stroke-width: 2
+  label: "outbox_events\n---\nid (PK)\ntenant_id (FK)\nevent_type\npayload (JSONB)\nstatus (PENDING|PUBLISHED|FAILED)\npublished_at\nretry_count\ncreated_at\n\nTransactional Outbox Pattern"
+}
+
+AuditLog: {
+  shape: table
+  label: "audit_logs\n---\nid (PK)\ntenant_id (FK)\nuser_id (FK)\naction\nresource_type\nresource_id\nmetadata (JSONB)\ncreated_at"
+}
+
+# Read Models (Denormalized)
+CustomerBalance: {
+  shape: table
+  style.opacity: 0.7
+  label: "customer_balances (Read Model)\n---\nid (PK)\ntenant_id (FK)\ncustomer_id (FK)\nbalance\nlast_updated_at\n\nUpdated via\nNATS events\n\nDerived from\nloyalty_ledger_entries"
+}
+
+# Relationships
+Tenant -> Location: "1:N"
+Tenant -> User: "1:N"
+Tenant -> CustomerMerchantAccount: "1:N"
+Tenant -> Transaction: "1:N"
+Tenant -> LoyaltyLedgerEntry: "1:N"
+Tenant -> Reward: "1:N"
+Tenant -> Redemption: "1:N"
+Tenant -> RuleSet: "1:N"
+Tenant -> Device: "1:N"
+Tenant -> OutboxEvent: "1:N"
+Tenant -> AuditLog: "1:N"
+
+Location -> Device: "1:N"
+User -> Device: "1:N (registered_by)"
+
+Customer -> CustomerMerchantAccount: "1:N"
+Customer -> Transaction: "1:N"
+Customer -> LoyaltyLedgerEntry: "1:N"
+Customer -> Redemption: "1:N"
+
+Transaction -> LoyaltyLedgerEntry: "1:N\n(Transaction header)"
+
+Reward -> Redemption: "1:N"
+
+# Key Constraints Notes
+LoyaltyLedgerEntry {
+  note: "IMMUTABLE\nAppend-only ledger\nSingle source of truth\nBalances DERIVED\nNOT stored"
+}
+
+OutboxEvent {
+  note: "Transactional Outbox\nEvents written atomically\nwith domain writes\nPulled by dispatcher\nPublished to NATS"
+}
+
+Transaction {
+  note: "Idempotency enforced\nvia UNIQUE constraint\non (tenant_id, idempotency_key)"
+}
+
+Redemption {
+  note: "Double-spend prevention:\n1. UNIQUE(tenant_id, idempotency_key)\n2. Optimistic locking\n3. SELECT FOR UPDATE in transaction"
+}
